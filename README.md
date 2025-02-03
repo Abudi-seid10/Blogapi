@@ -19,7 +19,7 @@ A FastAPI and Django-based Blog API that provides endpoints for managing blog po
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/Abudi-seid10/Blogapi.git
 cd blog-api
 ```
 
