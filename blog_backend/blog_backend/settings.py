@@ -148,6 +148,10 @@ CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 CORS_EXPOSE_HEADERS = ["Content-Type", "X-CSRFToken"]
 
+# JSON settings
+COERCE_DECIMAL_TO_STRING = True
+DATETIME_FORMAT = '%Y-%m-%dT%H:%M:%S.%fZ'
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 

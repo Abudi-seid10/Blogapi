@@ -1,110 +1,88 @@
 # Blog API
 
-A modern blog API built with Django and FastAPI, providing a robust backend for blog management.
-
-## Technologies Used
-
-- Django (Backend ORM and Admin)
-- FastAPI (API Layer)
-- SQLite (Database)
-- Uvicorn (ASGI Server)
-
-## Project Structure
-
-```
-blog_backend/
-├── blog/                  # Django app for blog models
-│   ├── models.py         # Blog data models
-│   └── admin.py          # Django admin configuration
-├── fastapi_app/          # FastAPI application
-│   └── main.py          # API endpoints and business logic
-└── blog_backend/         # Django project settings
-    └── settings.py       # Project configuration
-```
+A FastAPI and Django-based Blog API that provides endpoints for managing blog posts.
 
 ## Features
 
-- RESTful API endpoints for blog posts
-- Django Admin interface for content management
-- Async API operations with Django ORM
-- Image upload support for posts
-- User authentication and authorization
-- CORS support for frontend integration
+- CRUD operations for blog posts
+- Image upload support
+- Automatic slug generation
+- CORS enabled
+- Asynchronous request handling
 
-## API Endpoints
+## Requirements
 
-- `GET /posts` - List all blog posts
-- `GET /posts/{slug}` - Get a specific post by slug
-- `POST /posts` - Create a new blog post
+- Python 3.13+
+- Virtual environment
 
-## Setup Instructions
+## Installation
 
-1. Create a virtual environment:
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd blog-api
+```
+
+2. Create and activate virtual environment:
 ```bash
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+.\venv\Scripts\activate  # Windows
 ```
 
-2. Install dependencies:
+3. Install dependencies:
 ```bash
-pip install django fastapi uvicorn asgiref
+pip install -r requirements.txt
 ```
 
-3. Run migrations:
+4. Set up Django:
 ```bash
 cd blog_backend
 python manage.py migrate
-```
-
-4. Create a superuser:
-```bash
 python manage.py createsuperuser
 ```
 
-5. Run the FastAPI server:
+## Running the Application
+
+1. Start the FastAPI server:
 ```bash
-cd fastapi_app
-python -m uvicorn main:app --reload
+cd blog_backend/fastapi_app
+python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-6. Access the API at `http://127.0.0.1:8000`
-7. Access the Django admin at `http://127.0.0.1:8001/admin`
+2. Access the API at: http://localhost:8000
+3. API Documentation at: http://localhost:8000/docs
 
-## Deployment Instructions
+## API Endpoints
 
-The application is configured for Heroku deployment:
+### Posts
 
-1. Install Heroku CLI
-2. Login to Heroku: `heroku login`
-3. Create app: `heroku create your-app-name`
-4. Set environment variables in Heroku dashboard
-5. Deploy: `git push heroku main`
+- `GET /posts` - List all posts
+- `GET /posts/{slug}` - Get a specific post
+- `POST /posts` - Create a new post
+  ```json
+  {
+    "title": "Post Title",
+    "content": "Post Content",
+    "image": "optional-image-url"
+  }
+  ```
 
-## API Request Examples
+### Health Check
 
-### Create a Post
+- `GET /health` - Check API health status
+
+## Development
+
+- The application uses FastAPI for the API layer and Django for the database and admin interface
+- CORS is enabled for development with all origins allowed
+- Images are stored in the `media/post_images` directory
+- Logs are available in the console with DEBUG level enabled
+
+## Production Deployment
+
+1. Update CORS settings in `main.py` to restrict allowed origins
+2. Set DEBUG=False in Django settings
+3. Configure proper database settings
+4. Use Gunicorn with Uvicorn workers:
 ```bash
-curl -X 'POST' \
-  'http://127.0.0.1:8000/posts' \
-  -H 'accept: application/json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "title": "Sample Post",
-    "content": "This is a sample post content",
-    "slug": "sample-post"
-  }'
-```
-
-### Get All Posts
-```bash
-curl -X 'GET' \
-  'http://127.0.0.1:8000/posts' \
-  -H 'accept: application/json'
-```
-
-## Development Notes
-
-- Set `DEBUG = True` in settings.py for development
-- Configure `ALLOWED_HOSTS` in production
-- Use environment variables for sensitive data
-- Configure CORS settings based on your frontend URL
+gunicorn -w 4 -k uvicorn.workers.UvicornWorker main:app
