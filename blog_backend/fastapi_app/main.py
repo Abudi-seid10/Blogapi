@@ -310,7 +310,7 @@ async def create_user(user: UserCreate):
 @app.post("/token")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     user = await sync_to_async(User.objects.filter(username=form_data.username).first)()
-    if not user or not pwd_context.verify(form_data.password, user.password):
+    if not user or not await sync_to_async(user.check_password)(form_data.password):
         raise HTTPException(status_code=400, detail="Incorrect username or password")
     
     access_token = create_access_token(data={"sub": user.username})
