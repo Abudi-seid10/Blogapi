@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional, Union
 from datetime import datetime, timedelta
-import jwt
+from jose import JWTError, jwt
 from passlib.context import CryptContext
 from django.contrib.auth.models import User
 from blog.models import Post, Category, Tag, UserProfile, Comment, Reaction, Bookmark
@@ -127,17 +127,22 @@ def create_access_token(data: dict):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-def get_current_user(token: str = Depends(oauth2_scheme)):
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         if username is None:
-            raise HTTPException(status_code=401)
-    except jwt.JWTError:
-        raise HTTPException(status_code=401)
-    user = User.objects.filter(username=username).first()
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    user = await sync_to_async(User.objects.filter(username=username).first)()
     if user is None:
-        raise HTTPException(status_code=401)
+        raise credentials_exception
     return user
 
 # ---------- Serialization ----------
@@ -447,7 +452,7 @@ async def get_related_posts(post_id: int):
 async def get_rss_feed():
     feed = feedgenerator.Rss201rev2Feed(
         title="Blog API Feed",
-        link="http://example.com",
+        link="https://motech.et",
         description="Latest blog posts",
         language="en"
     )
