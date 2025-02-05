@@ -5,8 +5,21 @@ A FastAPI and Django-based Blog API that provides endpoints for managing blog po
 ## Features
 
 - CRUD operations for blog posts
+- User authentication and profiles
+- Categories and tags
+- Comments with nested replies
+- Post reactions (like/dislike)
+- Post bookmarks
+- Search functionality
+- Trending posts
+- Related posts suggestions
+- Automatic read time estimation
+- View counter
+- RSS feed
+- Social sharing
+- Draft support
 - Image upload support
-- Automatic slug generation
+- Pagination
 - CORS enabled
 - Asynchronous request handling
 
@@ -23,60 +36,139 @@ git clone https://github.com/Abudi-seid10/Blogapi.git
 cd blog-api
 ```
 
-2. Create and activate virtual environment:
-```bash
-python -m venv venv
-.\venv\Scripts\activate  # Windows
-```
-
-3. Install dependencies:
+2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-4. Set up Django:
+3. Run migrations:
 ```bash
 cd blog_backend
 python manage.py migrate
-python manage.py createsuperuser
 ```
 
-## Running the Application
-
-1. Start the FastAPI server:
+4. Start the server:
 ```bash
-cd blog_backend/fastapi_app
-python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn fastapi_app.main:app --reload
 ```
-
-2. Access the API at: http://localhost:8000
-3. API Documentation at: http://localhost:8000/docs
 
 ## API Endpoints
 
-### Posts
-
-- `GET /posts` - List all posts
-- `GET /posts/{slug}` - Get a specific post
-- `POST /posts` - Create a new post
+### Authentication
+- `POST /users` - Register new user
   ```json
   {
-    "title": "Post Title",
-    "content": "Post Content",
-    "image": "optional-image-url"
+    "username": "string",
+    "email": "user@example.com",
+    "password": "string"
+  }
+  ```
+- `POST /token` - Login and get access token
+- `GET /users/me` - Get current user profile
+- `PUT /users/me/profile` - Update user profile
+  ```json
+  {
+    "bio": "string",
+    "website": "string"
   }
   ```
 
-### Health Check
+### Posts
+- `GET /posts?skip=0&limit=15` - List posts with pagination
+- `GET /posts/{slug}` - Get specific post
+- `POST /posts` - Create new post
+  ```json
+  {
+    "title": "string",
+    "content": "string",
+    "image": "optional-image-url"
+  }
+  ```
+- `GET /posts/search?q=query` - Search posts
+- `GET /posts/trending?timeframe=24h` - Get trending posts (timeframe: 24h, 7d, 30d)
+- `GET /posts/{post_id}/related` - Get related posts
+- `POST /posts/{post_id}/view` - Increment post view count
+- `POST /posts/{post_id}/share` - Get social sharing links
 
-- `GET /health` - Check API health status
+### Categories & Tags
+- `POST /categories` - Create category
+  ```json
+  {
+    "name": "string",
+    "slug": "string"
+  }
+  ```
+- `POST /tags` - Create tag
+  ```json
+  {
+    "name": "string",
+    "slug": "string"
+  }
+  ```
+
+### Comments
+- `POST /posts/{post_id}/comments` - Add comment
+  ```json
+  {
+    "content": "string",
+    "parent_id": "optional-int"
+  }
+  ```
+- `GET /posts/{post_id}/comments` - Get post comments
+
+### Reactions & Bookmarks
+- `POST /posts/{post_id}/reactions?reaction_type=like` - React to post (like/dislike)
+- `POST /posts/{post_id}/bookmark` - Bookmark post
+- `GET /users/me/bookmarks` - Get user's bookmarks
+
+### Feed
+- `GET /feed/rss` - Get RSS feed
+
+### Health Check
+- `GET /health` - API health check
+
+## Authentication
+
+All endpoints except health check, post listing, and RSS feed require authentication. Include the access token in the Authorization header:
+
+```
+Authorization: Bearer your-access-token
+```
+
+## Response Format
+
+### Success Response
+```json
+{
+  "id": 1,
+  "title": "Post Title",
+  "content": "Post content",
+  "image": "image_url",
+  "created_at": "2024-02-03T19:19:26",
+  "updated_at": "2024-02-03T19:19:26",
+  "author_username": "user",
+  "slug": "post-title",
+  "view_count": 0,
+  "likes": 0,
+  "category": "Technology",
+  "tags": ["python", "api"],
+  "estimated_read_time": 5,
+  "is_draft": false
+}
+```
+
+### Error Response
+```json
+{
+  "detail": "Error message"
+}
+```
 
 ## Development
 
-- The application uses FastAPI for the API layer and Django for the database and admin interface
-- CORS is enabled for development with all origins allowed
-- Images are stored in the `media/post_images` directory
 - Logs are available in the console with DEBUG level enabled
+- Images are stored in the `media/post_images` directory
+- Avatars are stored in the `media/avatars` directory
 
 ## Production Deployment
 
@@ -86,3 +178,8 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 4. Use Gunicorn with Uvicorn workers:
 ```bash
 gunicorn -w 4 -k uvicorn.workers.UvicornWorker main:app
+```
+5. Change the SECRET_KEY in production
+6. Set up proper media file handling
+7. Configure SSL/TLS
+8. Set up proper caching

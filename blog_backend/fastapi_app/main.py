@@ -1,13 +1,39 @@
 import os
 import sys
 import logging
-from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel
-from typing import List, Optional
-from datetime import datetime
+
+# Add Django project root to Python path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+# Set up Django settings
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'blog_backend.settings')
+import django
+django.setup()
+
+from fastapi import FastAPI, HTTPException, Depends, Query, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, EmailStr
+from typing import List, Optional, Union
+from datetime import datetime, timedelta
+import jwt
+from passlib.context import CryptContext
+from django.contrib.auth.models import User
+from blog.models import Post, Category, Tag, UserProfile, Comment, Reaction, Bookmark
+from django.db.models import Q, Count
+import feedgenerator
 from asgiref.sync import sync_to_async
+
+# JWT settings
+SECRET_KEY = "your-secret-key"  # Change this in production
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -15,21 +41,7 @@ logger = logging.getLogger(__name__)
 # Set recursion limit
 sys.setrecursionlimit(3000)
 
-# Add the project root to Python path
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(project_root)
-logger.debug(f"Added {project_root} to Python path")
-
 # ---------- Django Setup ----------
-# Set up Django environment
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'blog_backend.settings')
-import django
-django.setup()
-
-# Import Django models after setup
-from blog.models import Post
-from django.contrib.auth.models import User
-
 # Get User model
 User = User
 
@@ -57,63 +69,185 @@ class PostBase(BaseModel):
 class PostCreate(PostBase):
     pass
 
-class PostResponse(PostBase):
+class PostResponse(BaseModel):
     id: int
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    author_id: Optional[int] = None
+    title: str
     slug: str
+    content: str
+    created_at: datetime
+    updated_at: datetime
+    is_draft: bool
+    view_count: int = 0
+    likes: int = 0
+    dislikes: int = 0
+    image: Optional[str] = None
+    author_username: Optional[str] = None
+    category_name: Optional[str] = None
+    tags: List[str] = []
+    estimated_read_time: int = 0
 
     class Config:
         from_attributes = True
 
-# ---------- Serialization ----------
-def serialize_post(post):
+class UserCreate(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
+
+class UserProfile(BaseModel):
+    bio: Optional[str] = None
+    website: Optional[str] = None
+
+class CategoryBase(BaseModel):
+    name: str
+    slug: str
+
+class TagBase(BaseModel):
+    name: str
+    slug: str
+
+class CommentCreate(BaseModel):
+    content: str
+    parent_id: Optional[int] = None
+
+class CommentResponse(BaseModel):
+    id: int
+    content: str
+    author_username: str
+    created_at: datetime
+    replies: List['CommentResponse'] = []
+
+    class Config:
+        from_attributes = True
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def get_current_user(token: str = Depends(oauth2_scheme)):
     try:
-        data = {
-            "id": post.id,
-            "title": post.title,
-            "content": post.content,
-            "image": str(post.image.url) if post.image else None,
-            "created_at": post.created_at.isoformat() if post.created_at else None,
-            "updated_at": post.updated_at.isoformat() if post.updated_at else None,
-            "author_id": post.author_id if hasattr(post, 'author_id') else None,
-            "slug": post.slug
-        }
-        logger.debug(f"Serialized post: {data}")
-        return data
-    except Exception as e:
-        logger.error(f"Error serializing post: {e}")
-        raise
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise HTTPException(status_code=401)
+    except jwt.JWTError:
+        raise HTTPException(status_code=401)
+    user = User.objects.filter(username=username).first()
+    if user is None:
+        raise HTTPException(status_code=401)
+    return user
+
+# ---------- Serialization ----------
+async def serialize_post(post_dict: dict) -> dict:
+    # Convert QueryDict to regular dict if needed
+    if hasattr(post_dict, '__dict__'):
+        post_dict = post_dict.__dict__
+
+    # Remove Django's internal state field
+    post_dict.pop('_state', None)
+    
+    # Handle image field
+    image = post_dict.get('image', None)
+    post_dict['image'] = str(image.url) if image and hasattr(image, 'url') else None
+    
+    # Handle author username
+    author_id = post_dict.get('author_id', None)
+    if author_id:
+        try:
+            author = await sync_to_async(User.objects.get)(id=author_id)
+            post_dict['author_username'] = author.username
+        except User.DoesNotExist:
+            post_dict['author_username'] = None
+    else:
+        post_dict['author_username'] = None
+
+    # Handle category name
+    category_id = post_dict.get('category_id', None)
+    if category_id:
+        try:
+            category = await sync_to_async(Category.objects.get)(id=category_id)
+            post_dict['category_name'] = category.name
+        except Category.DoesNotExist:
+            post_dict['category_name'] = None
+    else:
+        post_dict['category_name'] = None
+
+    # Handle tags
+    post_dict['tags'] = []
+    if 'id' in post_dict:
+        try:
+            post_tags = await sync_to_async(list)(Tag.objects.filter(post__id=post_dict['id']).values_list('name', flat=True))
+            post_dict['tags'] = list(post_tags)
+        except Exception:
+            pass
+
+    # Ensure all required fields are present with default values
+    post_dict.setdefault('view_count', 0)
+    post_dict.setdefault('likes', 0)
+    post_dict.setdefault('dislikes', 0)
+    post_dict.setdefault('estimated_read_time', 0)
+    post_dict.setdefault('is_draft', False)
+    
+    # Convert datetime objects to strings if needed
+    for field in ['created_at', 'updated_at']:
+        if isinstance(post_dict.get(field), datetime):
+            post_dict[field] = post_dict[field].isoformat()
+
+    return post_dict
+
+def serialize_comment(comment):
+    return {
+        "id": comment.get("id"),
+        "content": comment.get("content"),
+        "author_username": comment.get("author__username"),
+        "created_at": comment.get("created_at"),
+        "replies": [serialize_comment(reply) for reply in comment.get("replies", [])]
+    }
 
 # ---------- API Endpoints ----------
 @app.get("/posts", response_model=List[PostResponse])
-async def get_posts():
-    try:
-        logger.debug("Fetching all posts")
-        posts = await sync_to_async(list)(Post.objects.all())
-        logger.debug(f"Found {len(posts)} posts")
-        serialized = [serialize_post(post) for post in posts]
-        logger.debug(f"Serialized posts: {serialized}")
-        return serialized
-    except Exception as e:
-        logger.error(f"Error in get_posts: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+async def get_posts(skip: int = Query(default=0, ge=0), limit: int = Query(default=15, le=100)):
+    posts = await sync_to_async(list)(Post.objects.all().order_by('-created_at')[skip:skip + limit].values())
+    serialized_posts = []
+    for post in posts:
+        serialized_post = await serialize_post(post)
+        serialized_posts.append(serialized_post)
+    return serialized_posts
 
 @app.get("/posts/{slug}", response_model=PostResponse)
 async def get_post(slug: str):
     try:
-        logger.debug(f"Fetching post with slug: {slug}")
         post = await sync_to_async(Post.objects.get)(slug=slug)
-        serialized = serialize_post(post)
-        logger.debug(f"Serialized post: {serialized}")
-        return serialized
+        post_dict = await sync_to_async(lambda: post.__dict__)()
+        return await serialize_post(post_dict)
     except Post.DoesNotExist:
-        logger.error(f"Post not found with slug: {slug}")
         raise HTTPException(status_code=404, detail="Post not found")
     except Exception as e:
-        logger.error(f"Error in get_post: {e}")
+        logger.error(f"Error fetching post: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/posts/trending", response_model=List[PostResponse])
+async def get_trending_posts(timeframe: str = Query(default="24h", regex="^(24h|7d|30d)$")):
+    time_delta = {
+        "24h": timedelta(hours=24),
+        "7d": timedelta(days=7),
+        "30d": timedelta(days=30)
+    }[timeframe]
+    
+    since = datetime.now() - time_delta
+    posts = await sync_to_async(list)(
+        Post.objects.filter(created_at__gte=since)
+        .order_by('-view_count', '-likes', '-created_at')[:10]
+        .values()
+    )
+    serialized_posts = []
+    for post in posts:
+        serialized_post = await serialize_post(post)
+        serialized_posts.append(serialized_post)
+    return serialized_posts
 
 @app.post("/posts", response_model=PostResponse)
 async def create_post(post: PostCreate):
@@ -136,12 +270,218 @@ async def create_post(post: PostCreate):
         )
         logger.debug(f"Saving post: {db_post.__dict__}")
         await sync_to_async(db_post.save)()
-        serialized = serialize_post(db_post)
+        serialized = await serialize_post(db_post.__dict__)
         logger.debug(f"Created post: {serialized}")
         return serialized
     except Exception as e:
         logger.error(f"Error in create_post: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/posts/{post_id}/view")
+async def increment_view(post_id: int):
+    post = await sync_to_async(Post.objects.get)(id=post_id)
+    post.view_count += 1
+    await sync_to_async(post.save)()
+    return {"status": "success"}
+
+@app.post("/posts/{post_id}/like")
+async def like_post(post_id: int):
+    post = await sync_to_async(Post.objects.get)(id=post_id)
+    post.likes += 1
+    await sync_to_async(post.save)()
+    return {"status": "success"}
+
+@app.post("/users", response_model=dict)
+async def create_user(user: UserCreate):
+    if await sync_to_async(User.objects.filter(username=user.username).exists)():
+        raise HTTPException(status_code=400, detail="Username already registered")
+    
+    hashed_password = pwd_context.hash(user.password)
+    db_user = User(username=user.username, email=user.email)
+    db_user.set_password(hashed_password)
+    await sync_to_async(db_user.save)()
+    
+    # Create user profile
+    profile = UserProfile(user=db_user)
+    await sync_to_async(profile.save)()
+    
+    return {"message": "User created successfully"}
+
+@app.post("/token")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = await sync_to_async(User.objects.filter(username=form_data.username).first)()
+    if not user or not pwd_context.verify(form_data.password, user.password):
+        raise HTTPException(status_code=400, detail="Incorrect username or password")
+    
+    access_token = create_access_token(data={"sub": user.username})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.get("/users/me", response_model=dict)
+async def read_users_me(current_user: User = Depends(get_current_user)):
+    profile = await sync_to_async(UserProfile.objects.get)(user=current_user)
+    return {
+        "username": current_user.username,
+        "email": current_user.email,
+        "bio": profile.bio,
+        "website": profile.website
+    }
+
+@app.put("/users/me/profile")
+async def update_profile(profile: UserProfile, current_user: User = Depends(get_current_user)):
+    user_profile = await sync_to_async(UserProfile.objects.get)(user=current_user)
+    user_profile.bio = profile.bio
+    user_profile.website = profile.website
+    await sync_to_async(user_profile.save)()
+    return {"message": "Profile updated successfully"}
+
+@app.post("/categories")
+async def create_category(category: CategoryBase, current_user: User = Depends(get_current_user)):
+    db_category = Category(name=category.name, slug=category.slug)
+    await sync_to_async(db_category.save)()
+    return {"message": "Category created successfully"}
+
+@app.post("/tags")
+async def create_tag(tag: TagBase, current_user: User = Depends(get_current_user)):
+    db_tag = Tag(name=tag.name, slug=tag.slug)
+    await sync_to_async(db_tag.save)()
+    return {"message": "Tag created successfully"}
+
+@app.get("/posts/search")
+async def search_posts(q: str = Query(..., min_length=3)):
+    posts = await sync_to_async(list)(
+        Post.objects.filter(
+            Q(title__icontains=q) | Q(content__icontains=q),
+            is_draft=False
+        ).values()
+    )
+    serialized_posts = []
+    for post in posts:
+        serialized_post = await serialize_post(post)
+        serialized_posts.append(serialized_post)
+    return serialized_posts
+
+@app.post("/posts/{post_id}/comments")
+async def create_comment(
+    post_id: int,
+    comment: CommentCreate,
+    current_user: User = Depends(get_current_user)
+):
+    post = await sync_to_async(Post.objects.get)(id=post_id)
+    db_comment = Comment(
+        post=post,
+        author=current_user,
+        content=comment.content,
+        parent_id=comment.parent_id
+    )
+    await sync_to_async(db_comment.save)()
+    return {"message": "Comment created successfully"}
+
+@app.get("/posts/{post_id}/comments", response_model=List[CommentResponse])
+async def get_comments(post_id: int):
+    comments = await sync_to_async(list)(
+        Comment.objects.filter(post_id=post_id, parent=None)
+        .select_related('author')
+        .prefetch_related('replies')
+        .order_by('-created_at')
+        .values()
+    )
+    return [serialize_comment(comment) for comment in comments]
+
+@app.post("/posts/{post_id}/reactions")
+async def create_reaction(
+    post_id: int,
+    reaction_type: str = Query(..., regex="^(like|dislike)$"),
+    current_user: User = Depends(get_current_user)
+):
+    post = await sync_to_async(Post.objects.get)(id=post_id)
+    reaction, created = await sync_to_async(Reaction.objects.get_or_create)(
+        post=post,
+        user=current_user,
+        defaults={"reaction_type": reaction_type}
+    )
+    
+    if not created:
+        reaction.reaction_type = reaction_type
+        await sync_to_async(reaction.save)()
+    
+    return {"message": "Reaction recorded successfully"}
+
+@app.post("/posts/{post_id}/bookmark")
+async def bookmark_post(post_id: int, current_user: User = Depends(get_current_user)):
+    post = await sync_to_async(Post.objects.get)(id=post_id)
+    _, created = await sync_to_async(Bookmark.objects.get_or_create)(
+        post=post,
+        user=current_user
+    )
+    return {"message": "Post bookmarked successfully"}
+
+@app.get("/users/me/bookmarks")
+async def get_bookmarks(current_user: User = Depends(get_current_user)):
+    bookmarks = await sync_to_async(list)(
+        Bookmark.objects.filter(user=current_user)
+        .select_related('post')
+        .order_by('-created_at')
+        .values('post')
+    )
+    return [await serialize_post(bookmark['post']) for bookmark in bookmarks]
+
+@app.get("/posts/{post_id}/related")
+async def get_related_posts(post_id: int):
+    post = await sync_to_async(Post.objects.get)(id=post_id)
+    related_posts = await sync_to_async(list)(
+        Post.objects.filter(
+            Q(category=post.category) | Q(tags__in=post.tags.all())
+        )
+        .exclude(id=post_id)
+        .distinct()
+        .order_by('-created_at')[:5]
+        .values()
+    )
+    serialized_posts = []
+    for post in related_posts:
+        serialized_post = await serialize_post(post)
+        serialized_posts.append(serialized_post)
+    return serialized_posts
+
+@app.get("/feed/rss")
+async def get_rss_feed():
+    feed = feedgenerator.Rss201rev2Feed(
+        title="Blog API Feed",
+        link="http://example.com",
+        description="Latest blog posts",
+        language="en"
+    )
+    
+    posts = await sync_to_async(
+        Post.objects.filter(is_draft=False)
+        .order_by('-created_at')[:10]
+        .values()
+    )()
+    
+    for post in posts:
+        feed.add_item(
+            title=post.title,
+            link=f"http://example.com/posts/{post.slug}",
+            description=post.content[:200],
+            pubdate=post.created_at
+        )
+    
+    return Response(
+        content=feed.writeString('utf-8'),
+        media_type="application/xml"
+    )
+
+@app.post("/posts/{post_id}/share")
+async def share_post(post_id: int):
+    post = await sync_to_async(Post.objects.get)(id=post_id)
+    share_url = f"http://example.com/posts/{post.slug}"
+    return {
+        "share_urls": {
+            "twitter": f"https://twitter.com/intent/tweet?url={share_url}",
+            "facebook": f"https://www.facebook.com/sharer/sharer.php?u={share_url}",
+            "linkedin": f"https://www.linkedin.com/sharing/share-offsite/?url={share_url}"
+        }
+    }
 
 # ---------- Startup Event ----------
 @app.on_event("startup")
@@ -167,7 +507,7 @@ async def http_exception_handler(request, exc):
 async def general_exception_handler(request, exc):
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal server error"},
+        content={"detail": str(exc)}
     )
 
 # ---------- Health Check ----------
