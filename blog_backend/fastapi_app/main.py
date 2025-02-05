@@ -300,7 +300,8 @@ async def create_user(user: UserCreate):
     db_user.set_password(user.password)  # This properly hashes the password
     await sync_to_async(db_user.save)()
     
-    # Create user profile
+    # Create user profile using Django's model
+    from blog.models import UserProfile
     profile = UserProfile(user=db_user)
     await sync_to_async(profile.save)()
     
