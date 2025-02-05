@@ -28,7 +28,7 @@ import feedgenerator
 from asgiref.sync import sync_to_async
 
 # JWT settings
-SECRET_KEY = "your-secret-key"  # Change this in production
+SECRET_KEY = "c4debad33d82a88d5ec488d21b5dfbc6ec45110d6405735c43125a1763d0fca8af5bbeb92d575591b27a952e5a683ce5a1501c011ab59b2ed750b7b74dbd87924b524a0b393ed90a127eeff8c350301ae8ceb2ec77e7e961ddf0ed254119a271f9009bc3d7563a7db915016e29debb7fb8b5cefd78599a2ea77bae39e97b8139fae9b18710a2d2aa5cdc3785e4263d9359f9f5fb93c4f73e7f7fd4869a2b0a29becf038979cb3e04c302e41dd6102bfa9fb11b1546f464f534a0a8608e54a026f49c69acc7831077f242cf5686d5dad081aea1316c56e4d05ef2188d4bb0da8de93d59b09964706cbcfaa03f02a6f7712446a4b75f8efaa1667cdd85c87ed800"  # Change this in production
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -296,9 +296,8 @@ async def create_user(user: UserCreate):
     if await sync_to_async(User.objects.filter(username=user.username).exists)():
         raise HTTPException(status_code=400, detail="Username already registered")
     
-    hashed_password = pwd_context.hash(user.password)
     db_user = User(username=user.username, email=user.email)
-    db_user.set_password(hashed_password)
+    db_user.set_password(user.password)  # This properly hashes the password
     await sync_to_async(db_user.save)()
     
     # Create user profile
